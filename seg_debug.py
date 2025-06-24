@@ -239,7 +239,6 @@ def main():
         # Apply brightness adjustment only to the person region
         bright_person_region = adjust_brightness(person_region, brightness_value)
         brighter_person = calculate_brightness(bright_person_region)
-        print(brighter_person)
 
         cv2.imshow("Brightness Adjusted Preview", bright_person_region)
 
@@ -247,13 +246,22 @@ def main():
         frame_adjusted = frame.copy()
         frame_adjusted[person_mask > 0] = bright_person_region[person_mask > 0]
 
-        output_frame, result, objects = detect_colors_in_segmented_person(
-    frame_adjusted, colors_to_detect, person_mask)
+        brightness_frame, result, objects = detect_colors_in_segmented_person(frame_adjusted, colors_to_detect, person_mask)
         
+
+        # Display information
+        cv2.putText(brightness_frame, f"Detecting: {', '.join(colors_to_detect)}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(brightness_frame, f"Color regions found: {len(objects)}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(brightness_frame, "Press Q to quit", (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     # For showing the output of the brightness of the person.
-        cv2.putText(output_frame, f"Person Brightness: {brighter_person:.1f}", (10, 150),
+        cv2.putText(brightness_frame, f"Person Brightness: {brighter_person:.1f}", (10, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
+        # Show results
+        cv2.imshow('Brightness Adjusted Preview', brightness_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
