@@ -52,6 +52,19 @@ def clean_mask(mask):
     
     return cleaned
 
+# This will adjust the brightness from the detected person.
+def adjust_brightness(image, brightness_value):
+    """Adjust brightness of an image. brightness_value is from -100 to +100"""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+
+    # Apply brightness offset and clip to 0-255
+    v = np.clip(v + brightness_value, 0, 255).astype(np.uint8)
+
+    final_hsv = cv2.merge((h, s, v))
+    bright_img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+    return bright_img
+
 def detect_colors_in_segmented_person(frame, colors_to_detect, person_mask, min_area=500):
     """Detects colors within the segmented person area following the outline"""
     # Pre-process frame
@@ -128,23 +141,34 @@ def detect_colors_in_segmented_person(frame, colors_to_detect, person_mask, min_
     
     return output_frame, result, all_objects
 
+
+def nothing(x):
+    # This function solely exists for passing a value to the brightness tracker.
+    pass
+
 def main():
     # Load YOLOv8n-seg modelx
-    model = YOLO('yolov8x-seg.pt')
+    model = YOLO('yolov8n-seg.pt')
     
     cap = cv2.VideoCapture(0)
-    
     # Specify which colors you want to detect
     colors_to_detect = ['red', 'orange', 'yellow', 'green', 'blue', 
                        'indigo', 'violet', 'white', 'gray', 'black', 'brown']
+
+    cv2.namedWindow("Person Segmentation with Color Detection")
     
+    # For showing the output of the brightness adjust
+    cv2.namedWindow("Brightness Adjusted Preview")
+    cv2.createTrackbar("Brightness", "Brightness Adjusted Preview", 100, 200, nothing)
+
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         
         # Flip frame horizontally for mirror view
-        frame = cv2.flip(frame, 1)
+        # frame = cv2.flip(frame, 1)
         
         # Run YOLOv8 segmentation
         results = model(frame, classes=[0])  # 0 is the class ID for person
@@ -173,6 +197,16 @@ def main():
         if np.max(person_mask) > 0:
             output_frame, result, objects = detect_colors_in_segmented_person(
                 frame, colors_to_detect, person_mask)
+            # Apply the mask to the frame to isolate the person region
+            person_region = cv2.bitwise_and(frame, frame, mask=person_mask)
+            person_brightness = calculate_brightness(person_region)
+
+
+            # Checking the person if its too dark or not.
+            if person_brightness < 10:
+                print("Person too dark, skipping detection.")
+                continue
+
         else:
             output_frame = frame.copy()
             result = np.zeros_like(frame)
@@ -185,11 +219,42 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(output_frame, "Press Q to quit", (10, 90),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        # For showing the output of the whole frame's brightness uncomment the code below to test.
+        # brightness = calculate_brightness(frame)
+        # cv2.putText(output_frame, f"Brightness: {brightness:.1f}", (10, 120),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # For showing the output of the brightness of the person.
+        cv2.putText(output_frame, f"Person Brightness: {person_brightness:.1f}", (10, 150),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         # Show results
         cv2.imshow('Person Segmentation with Color Detection', output_frame)
         cv2.imshow('Segmented Colors', result)
+
+        # Get brightness value from trackbar (-100 to +100)
+        brightness_value = cv2.getTrackbarPos('Brightness', 'Brightness Adjusted Preview') - 100
+      
+        # Apply brightness adjustment only to the person region
+        bright_person_region = adjust_brightness(person_region, brightness_value)
+        brighter_person = calculate_brightness(bright_person_region)
+        print(brighter_person)
+
+        cv2.imshow("Brightness Adjusted Preview", bright_person_region)
+
+        # Merge the brightened person region back into the frame
+        frame_adjusted = frame.copy()
+        frame_adjusted[person_mask > 0] = bright_person_region[person_mask > 0]
+
+        output_frame, result, objects = detect_colors_in_segmented_person(
+    frame_adjusted, colors_to_detect, person_mask)
         
+    # For showing the output of the brightness of the person.
+        cv2.putText(output_frame, f"Person Brightness: {brighter_person:.1f}", (10, 150),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
