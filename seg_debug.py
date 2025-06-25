@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from brightness_correction import calculate_brightness, adjust_brightness, nothing, auto_adjust_contrast, adjust_contrast, detect_colors_lab
+
 # Dictionary of HSV ranges for common colors
 COLOR_RANGES = {
     'red': [
@@ -35,10 +37,20 @@ DISPLAY_COLORS = {
     'brown': (42, 42, 165)
 }
 
-def calculate_brightness(image):
-    """Calculate the average brightness of the image"""
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    return np.mean(hsv[:,:,2])
+# Approximate LAB color references (L, A, B) for perceptual distance comparison
+COLOR_LAB_REFERENCES = {
+    'red':     np.array([53, 80, 67]),
+    'orange':  np.array([65, 50, 70]),
+    'yellow':  np.array([97, -21, 94]),
+    'green':   np.array([87, -86, 83]),
+    'blue':    np.array([32, 79, -108]),
+    'indigo':  np.array([30, 60, -80]),
+    'violet':  np.array([60, 80, -40]),
+    'white':   np.array([100, 0, 0]),
+    'gray':    np.array([50, 0, 0]),
+    'black':   np.array([0, 0, 0]),
+    'brown':   np.array([37, 25, 15])
+}
 
 def clean_mask(mask):
     """Apply morphological operations to clean the mask"""
@@ -52,18 +64,6 @@ def clean_mask(mask):
     
     return cleaned
 
-# This will adjust the brightness from the detected person.
-def adjust_brightness(image, brightness_value):
-    """Adjust brightness of an image. brightness_value is from -100 to +100"""
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-
-    # Apply brightness offset and clip to 0-255
-    v = np.clip(v + brightness_value, 0, 255).astype(np.uint8)
-
-    final_hsv = cv2.merge((h, s, v))
-    bright_img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
-    return bright_img
 
 def detect_colors_in_segmented_person(frame, colors_to_detect, person_mask, min_area=500):
     """Detects colors within the segmented person area following the outline"""
@@ -142,10 +142,6 @@ def detect_colors_in_segmented_person(frame, colors_to_detect, person_mask, min_
     return output_frame, result, all_objects
 
 
-def nothing(x):
-    # This function solely exists for passing a value to the brightness tracker.
-    pass
-
 def main():
     # Load YOLOv8n-seg modelx
     model = YOLO('yolov8n-seg.pt')
@@ -155,11 +151,17 @@ def main():
     colors_to_detect = ['red', 'orange', 'yellow', 'green', 'blue', 
                        'indigo', 'violet', 'white', 'gray', 'black', 'brown']
 
-    cv2.namedWindow("Person Segmentation with Color Detection")
+    # cv2.namedWindow("Person Segmentation with Color Detection")
     
     # For showing the output of the brightness adjust
     cv2.namedWindow("Brightness Adjusted Preview")
     cv2.createTrackbar("Brightness", "Brightness Adjusted Preview", 100, 200, nothing)
+
+    # For the constrast region tracking
+
+    cv2.namedWindow("Adjusted Contrast")
+    cv2.createTrackbar("Contrast", "Brightness Adjusted Preview", 100, 300, nothing)
+
 
 
     while True:
@@ -213,26 +215,24 @@ def main():
             objects = []
         
         # Display information
-        cv2.putText(output_frame, f"Detecting: {', '.join(colors_to_detect)}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(output_frame, f"Color regions found: {len(objects)}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(output_frame, "Press Q to quit", (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        # cv2.putText(output_frame, f"Detecting: {', '.join(colors_to_detect)}", (10, 30),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        # cv2.putText(output_frame, f"Color regions found: {len(objects)}", (10, 60),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        # cv2.putText(output_frame, "Press Q to quit", (10, 90),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # For showing the output of the whole frame's brightness uncomment the code below to test.
-        # brightness = calculate_brightness(frame)
-        # cv2.putText(output_frame, f"Brightness: {brightness:.1f}", (10, 120),
+        
+        # # For showing the output of the brightness of the person.
+        # cv2.putText(output_frame, f"Person Brightness: {person_brightness:.1f}", (10, 150),
         #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
-        # For showing the output of the brightness of the person.
-        cv2.putText(output_frame, f"Person Brightness: {person_brightness:.1f}", (10, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
         # Show results
-        cv2.imshow('Person Segmentation with Color Detection', output_frame)
-        cv2.imshow('Segmented Colors', result)
+        # cv2.imshow('Person Segmentation with Color Detection', output_frame)
+        # cv2.imshow('Segmented Colors', result)
 
+
+        ''' The rest of the code in here are the codes for the adjusted brightness '''
         # Get brightness value from trackbar (-100 to +100)
         brightness_value = cv2.getTrackbarPos('Brightness', 'Brightness Adjusted Preview') - 100
       
@@ -240,28 +240,76 @@ def main():
         bright_person_region = adjust_brightness(person_region, brightness_value)
         brighter_person = calculate_brightness(bright_person_region)
 
+        # For calculating the contrast
+        contrast_slider_val = cv2.getTrackbarPos('Contrast', 'Brightness Adjusted Preview')
+        contrast_factor = contrast_slider_val / 100.0  # E.g., 100 => 1.0 (no change)
+
+        # Automatically enhance contrast using CLAHE
+        #contrast_person_region = auto_adjust_contrast(bright_person_region)
+        contrast_manual_person = adjust_contrast(bright_person_region, contrast_factor)
+
         cv2.imshow("Brightness Adjusted Preview", bright_person_region)
+
+        cv2.imshow("Adjusted Contrast", contrast_manual_person)
 
         # Merge the brightened person region back into the frame
         frame_adjusted = frame.copy()
         frame_adjusted[person_mask > 0] = bright_person_region[person_mask > 0]
 
-        brightness_frame, result, objects = detect_colors_in_segmented_person(frame_adjusted, colors_to_detect, person_mask)
-        
-
+                # Re-run color detection on contrast-enhanced frame
+        brightness_frame, result, objects = detect_colors_in_segmented_person(
+            frame_adjusted, colors_to_detect, person_mask)
+    
         # Display information
         cv2.putText(brightness_frame, f"Detecting: {', '.join(colors_to_detect)}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
         cv2.putText(brightness_frame, f"Color regions found: {len(objects)}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
         cv2.putText(brightness_frame, "Press Q to quit", (10, 90),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    # For showing the output of the brightness of the person.
+
+        # For showing the output of the brightness of the person.
         cv2.putText(brightness_frame, f"Person Brightness: {brighter_person:.1f}", (10, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
+        # For showing the contrast
+        cv2.putText(brightness_frame, f"Contrast Factor: {contrast_factor:.2f}", (10, 180),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
         # Show results
         cv2.imshow('Brightness Adjusted Preview', brightness_frame)
+
+        '''This is for the constrast frames to adjust the contrast of the camera feed.'''
+
+        # Merge the brightened person region back into the frame
+        frame_contrast = frame.copy()
+        frame_contrast[person_mask > 0] = contrast_manual_person[person_mask > 0]
+
+
+        # Re-run color detection on contrast-enhanced frame
+        contrast_frame, result, objects = detect_colors_in_segmented_person(
+            frame_contrast, colors_to_detect, person_mask)
+
+
+          # Display information
+        cv2.putText(contrast_frame, f"Detecting: {', '.join(colors_to_detect)}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+        cv2.putText(contrast_frame, f"Color regions found: {len(objects)}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        cv2.putText(contrast_frame, "Press Q to quit", (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        # For showing the contrast
+        cv2.putText(contrast_frame, f"Contrast Factor: {contrast_factor:.2f}", (10, 180),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        cv2.imshow('Adjusted Contrast', contrast_frame)
+
+        ''' The codes regarding brightness correction stops in here. '''
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break

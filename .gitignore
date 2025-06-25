@@ -2,3 +2,7 @@
 .venv
 yolov8n-seg.pt
 yolov8x-seg.pt
+.notes.txt.kate-swp
+__init__.py
+__pycache__
+notes.txt
