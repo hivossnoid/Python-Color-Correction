@@ -8,7 +8,6 @@ def calculate_brightness(image):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     return np.mean(hsv[:,:,2])
 
-
 # This will adjust the brightness from the detected person.
 def adjust_brightness(image, brightness_value):
     """Adjust brightness of an image. brightness_value is from -100 to +100"""
@@ -21,6 +20,57 @@ def adjust_brightness(image, brightness_value):
     final_hsv = cv2.merge((h, s, v))
     bright_img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
     return bright_img
+
+def adjust_brightness_2(image, brightness_value):
+    """
+    Adjust brightness of an image. brightness_value is from -100 to +100.
+    Uses linear scaling on the BGR image to increase or decrease brightness.
+    """
+    # Convert brightness from -100 to 100 into a scale factor between 0.0 and 2.0
+    # Where 0 means completely black, 1 means original, and 2 means double brightness
+    factor = (brightness_value + 100) / 100.0  # Converts to range [0.0, 2.0]
+    
+    # Scale the image and clip to valid range
+    bright_img = np.clip(image * factor, 0, 255).astype(np.uint8)
+    
+    return bright_img
+
+def auto_adjust_brightness_contrast(region, brightness_thresholds=(35, 50)):
+    """
+    Automatically adjusts brightness and contrast of the person region.
+    
+    Parameters:
+        region (np.ndarray): The image region to adjust.
+        brightness_thresholds (tuple): (low_brightness, optimal_brightness).
+    
+    Returns:
+        adjusted_region (np.ndarray): Brightness and contrast corrected region.
+        contrast_factor (float): Used contrast adjustment factor.
+        brightness_before (float): Original brightness value.
+    """
+    brightness_before = calculate_brightness(region)
+
+    # Initialize values
+    brightness_offset = 0
+    contrast_factor = 1.0
+
+    # Determine brightness adjustment
+    if brightness_before < brightness_thresholds[0]:
+        brightness_offset = brightness_thresholds[1] - brightness_before
+        contrast_factor = 1.6
+    elif brightness_before < brightness_thresholds[1]:
+        brightness_offset = brightness_thresholds[1] - brightness_before
+        contrast_factor = 2.1
+    else:
+        brightness_offset = 0
+        contrast_factor = 1.2  # Mild boost if brightness is already decent
+
+    # Apply brightness and contrast
+    brightened = adjust_brightness_2(region, int(brightness_offset))
+    adjusted = adjust_contrast(brightened, contrast_factor)
+
+    return adjusted, contrast_factor, brightness_before
+
 
 def auto_adjust_contrast(image):
     """
@@ -54,52 +104,6 @@ def adjust_contrast(image, contrast_factor):
 # brightness = calculate_brightness(frame)
 # cv2.putText(output_frame, f"Brightness: {brightness:.1f}", (10, 120),
 #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-def detect_colors_lab(frame, person_mask, colors_to_detect, threshold=30):
-    """
-    Detect dominant colors in the person region using LAB distance.
-    """
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    mask_indices = np.where(person_mask > 0)
-    detected = []
-
-    output_frame = frame.copy()
-
-    for color_name in colors_to_detect:
-        if color_name not in COLOR_LAB_REFERENCES:
-            continue
-        
-        target_lab = COLOR_LAB_REFERENCES[color_name]
-        distances = np.linalg.norm(lab[mask_indices] - target_lab, axis=1)
-
-        match_mask = np.zeros(person_mask.shape, dtype=np.uint8)
-        match_pixels = (distances < threshold)
-
-        # Only set matching pixels
-        match_mask[mask_indices[0][match_pixels], mask_indices[1][match_pixels]] = 255
-
-        # Clean up the mask
-        cleaned_mask = clean_mask(match_mask)
-
-        contours, _ = cv2.findContours(cleaned_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > 500:
-                cv2.drawContours(output_frame, [contour], -1, DISPLAY_COLORS[color_name], 2)
-                M = cv2.moments(contour)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    cv2.circle(output_frame, (cx, cy), 5, DISPLAY_COLORS[color_name], -1)
-                    cv2.putText(output_frame, color_name, (cx - 20, cy - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, DISPLAY_COLORS[color_name], 1)
-                    detected.append({
-                        'color': color_name,
-                        'center': (cx, cy),
-                        'area': area
-                    })
-
-    return output_frame, detected
 
 
 def nothing(x):
